@@ -6,7 +6,7 @@
 | 项目性质 | 基于 BobaChop 解析内核的数据库中间件（JDBC 驱动内嵌形态）：分库分表 + 透明加密；替换存量生产实现 |
 | 仓库与坐标 | github.com/susongyan/bobapour；groupId `io.github.susongyan`；包根 `io.github.susongyan.bobapour`；构件前缀 `boba-pour` |
 | 运行时依赖 | 仅 `boba-chop-core`（1.x）；JDBC 驱动 provided |
-| 方言范围 | MySQL 先行，Oracle 其次 |
+| 方言范围 | MySQL 先行，PostgreSQL 与 Oracle 随后 |
 | 配套文档 | BobaChop 项目书（`bobachop.md`，随迁 bobachop 仓 DESIGN.md）——内核层规格与缘起不在此重复 |
 | 文档目的 | 单一事实源：任何工程师或 AI Agent 依据本文档即可继续设计与实现，无需对话上下文 |
 
@@ -222,7 +222,7 @@ BobaChop M1（SELECT 主干）完成即可启动本仓 M2，两仓流水推进�
 | T8 | 加密改写全量（M3） | T7 | 存量 encrypt 语料全量对拍全绿；含 insert-select/plain/assisted/参数加密 |
 | T9 | 影子框架：双跑对比 + 报告 + kill switch | T7 | 按比例双跑；秒级切换演练通过 |
 | T10 | bench：决策链端到端 + 影子延迟采集 | T4 | KPI 报告（p99、内存上界、与存量对比） |
-| T11 | Oracle 方言适配（改写模板/分页/驱动参数） | T8 | Oracle 语料三相等对拍全绿 |
+| T11 | 方言适配：PostgreSQL / Oracle（改写模板/分页/驱动参数，跟随内核 M3/M4 次序） | T8 | 对应方言语料三相等对拍全绿 |
 
 通用约束：Java 8；运行时依赖仅 boba-chop-core；不复制存量代码；每任务含黄金用例与对拍断言；公共类 javadoc 必备。
 
