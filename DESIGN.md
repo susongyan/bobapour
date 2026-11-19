@@ -3,7 +3,7 @@
 | 项 | 值 |
 |---|---|
 | 状态 | 设计定稿，未开工 |
-| 项目性质 | 基于 BobaChop 解析内核的数据库中间件（JDBC 驱动内嵌形态）：分库分表 + 透明加密；替换存量生产实现 |
+| 项目性质 | 基于 BobaChop 解析内核的数据库中间件（JDBC 内嵌形态）：分库分表 + 透明加密；替换存量生产实现 |
 | 仓库与坐标 | github.com/susongyan/bobapour；groupId `io.github.susongyan`；包根 `io.github.susongyan.bobapour`；构件前缀 `boba-pour` |
 | 运行时依赖 | 仅 `boba-chop-core`（1.x）；JDBC 驱动 provided |
 | 方言范围 | MySQL → PostgreSQL → Oracle（跟随内核 M3/M4 次序） |
@@ -78,8 +78,8 @@
 
 - 联邦查询/跨分片非绑定 JOIN/跨分片相关子查询——**永久非目标**
 - DISTINCT 跨分片、GROUP BY 非分片键重聚合（v2 按生产语料决定）；AVG（v1.1 拆 SUM+COUNT）
-- Proxy 接入形态（v1 仅 JDBC 驱动内嵌）
-- 读写分离（v2 按需）；DDL 路由与同步、分片弹性扩容/数据迁移工具
+- Proxy 接入形态（v1 仅 JDBC 内嵌形态）
+- 读写分离（v2 按需）；DDL 路由与同步（含分区 DDL/滚动分区运维，见 D13）、分片弹性扩容/数据迁移工具
 - SQL 优化器/代价下推（改写仅服务于路由与归并正确性，不做性能改写）
 - 不承诺全语法兼容——支持面 = 各级白名单，见 §5.2
 
@@ -105,11 +105,11 @@
 ```
 应用（JDBC）
    │
-boba-pour-driver      JDBC 契约层：DataSource/Connection/Statement/ResultSet；直通/分片双模式
+boba-pour-jdbc        JDBC 契约层：DataSource/Connection/Statement/ResultSet；直通/分片双模式
    │
 boba-pour-engine
    ├─ bind            AST × 元数据/规则 → 带语义语句（分片条件提取、加密列定位）
-   ├─ route           逻辑表 → 物理分片目标（精确/IN/广播），分片算法 SPI
+   ├─ route           逻辑表 → 物理分片目标（精确/IN/广播），分片算法 SPI；分区维度（D13）输出库内分区目标，与分片正交
    ├─ rewrite         token 装配式改写：表名替换、加密列展开、参数加密、分页修正、归并所需 ORDER BY
    ├─ execute         分片 SQL 并行编排（fan-out 受限）、连接/事务管理
    └─ merge           归并矩阵执行：拼接/流式/TopN/聚合重组装；MergePlan 裁决入口
@@ -150,9 +150,12 @@ boba-chop-core        parse(sql) → Statement AST + fingerprint（内核项目�
 | D5 | **加密语义按存量实现移植：cipher/plain/assisted 列、参数加密、insert-select** | 语义已生产验证，移植语义而非重新设计；对拍语料 = 存量 encrypt 测试集全量。ORDER BY/GROUP BY 落加密列仅支持确定性加密或辅助列，改写层在执行前完成列替换，归并层只见改写后语义 |
 | D6 | **对拍体系三层：决策链回放 → 改写对拍 → 影子双跑** | 决策链零执行零成本，可先于一切实现对生产流量量化落格/拒绝占比；改写对拍锁"三相等"前两等；影子锁第三等。层层递进，每层失败成本递增、频率递减 |
 | D7 | **配置模型自有 YAML + 存量配置转换器** | 语义对齐存量（分片规则/加密规则/广播表/绑定表一一对应），迁移 = 转换器跑一遍 + 人工 diff；新模型不加存量没有的概念（v1） |
-| D8 | **Driver 直通模式为 M1 基线** | 无分片无加密全透传，先把 JDBC 契约行为对拍原生驱动锚死；直通路径永远保留（分片配置为空的表天然走直通） |
+| D8 | **JDBC 直通模式为 M1 基线** | 无分片无加密全透传，先把 JDBC 契约行为对拍原生驱动锚死；直通路径永远保留（分片配置为空的表天然走直通） |
 | D9 | **写路径无归并：INSERT 按分片键拆行路由（自动生成键仅单分片）；UPDATE/DELETE 多分片=影响行数求和** | 写路径没有结果集归并问题，只有路由与改写；自动生成键跨分片无一致语义，直接限制 |
 | D10 | **广播表 v1 就带** | 维度表全副本：读取任一分片、写全广播，归并复杂度为零，实现廉价而使用高频 |
+| D11 | **构件名 `boba-pour-jdbc`，对外唯一入口 `DataSource`；v1 不实现 `java.sql.Driver`、不注册 SPI** | 命名对齐生态惯例：此形态通行后缀 `-jdbc`（如 ShardingSphere-JDBC），`-driver` 通指真驱动实现，消除与 `java.sql.Driver`/`DriverManager` 的词汇冲突；且 DriverManager/URL 路径天然引向“外层池包住虚拟 Connection”——缓存一条虚拟连接即钉死一组跨分片物理连接——不设此形态 |
+| D12 | **物理连接池不自研、不硬绑：池由部署方供给——DataSource 实例注入或 `dataSourceClassName`+properties 反射构造，池 jar 与原生驱动同为 provided** | 池是成熟商品，自研 = 凭空新增最厚 bug 面，与立项逻辑（砍复杂度税）相悖；“运行时依赖仅 boba-chop-core”硬约束保持成立；迁移保留存量池配置（D7 一一映射），影子双跑新旧同池、延迟对比才诚实。pour 仍承担三条与池选型无关的契约：①借出显式设满连接状态（池归还时会重置 autocommit/isolation/catalog）②流式持有期参数入 D3 驱动参数模板③fan-out 容量换算（单分片池 ≈ 应用并发 × 平均路由分片数，受 `maxShardsPerQuery` 封顶）写进配置文档；①②进 M1 契约测试矩阵 |
+| D13 | **原生分区表 DML 定位改写（表级开关，默认关）：只改写写路径（INSERT/UPDATE/DELETE），读路径永不改写；分区 DDL 非目标** | 机制：bind 提取分区键值 → route 输出（数据源， 分区目标）→ 方言模板改写——PG 子分区表名替换 / MySQL 追加 `PARTITION(p)` 选择子；分区维度与分片维度正交可组合。仅 RANGE/LIST（HASH 须 bit 级复刻 PG 哈希函数，兼容风险大不做）。**改写是优化而非正确性依赖**：边界 miss、键值不可静态定位（多行 VALUES 跨分区、insert-select、无分区键等值谓词）、SET 含分区键（跨分区更新，改写到子表必违反分区约束）、HASH、快照过期 → 一律回退父表原生行为——分区由外部运维管理（不做 DDL），pour 永不制造错误行为。读不改写：子表化会按语句文本碎片化 plan cache，且迫使 pour 复刻裁剪逻辑（立项要砍的复杂度税）；父表 + 原生裁剪（含参数化执行期裁剪）+ 研发友好。分区边界自 catalog 采集进只读快照（pg_inherits/relpartbound），刷新为运维命令，漂移由回退网兜住；加密列不得为分区键；存量无此行为——开启表不进改写对拍，影子不受影响（影响行数不变）。内核协调项：MySQL 语法白名单需可解析 `PARTITION(p)` 选择子（透传输入即可能含）；PG 路径内核零新增 |
 
 ## 7. 归并矩阵（v1）
 
@@ -179,14 +182,14 @@ guards（全局，超限=执行前拒绝）：`maxShardsPerQuery`（默认 8，�
 
 ```
 bobapour/                             # GitHub 仓库根 = Maven 聚合工程（groupId io.github.susongyan，artifactId boba-pour）
-├── boba-pour-driver/                 # JDBC 契约层（直通/分片双模式）
+├── boba-pour-jdbc/                   # JDBC 契约层（直通/分片双模式）
 ├── boba-pour-engine/                 # bind / route / rewrite / execute / merge / guards
 ├── boba-pour-config/                 # YAML 模型 + 元数据快照 + 存量配置转换器
-└── corpus/                           # 通用回归语料：按形态"类"构造（覆盖含金融在内的各行业典型分片/加密形态，
+└── corpus/                           # 通用回归语料：按形态"类"构造（覆盖含金融在内的各行业典型分片/加密/分区形态，
                                       #   合成命名，不派生自任何真实系统）；生产实例语料（真实捕获）一律内网
 ```
 
-包根 `io.github.susongyan.bobapour`：`.driver / .engine(.bind .route .rewrite .execute .merge) / .config / .spi / .exception`。类名不带项目前缀，命名空间由包承担。
+包根 `io.github.susongyan.bobapour`：`.jdbc / .engine(.bind .route .rewrite .execute .merge) / .config / .spi / .exception`。类名不带项目前缀，命名空间由包承担。
 
 ## 9. 质量门禁与验收（对拍三关）
 
@@ -201,7 +204,7 @@ bobapour/                             # GitHub 仓库根 = Maven 聚合工程（
 | 里程碑 | 内容 | 验收 |
 |---|---|---|
 | M0 | 工程骨架 + 配置/元数据模型 + **决策链骨架（bind→route→MergePlan 裁决+guards+异常），回放工具可用** | 配置转换黄金用例；语料回放报告产出落格分布 |
-| M1 | Driver 直通模式 | JDBC 契约行为对拍原生驱动全绿 |
+| M1 | JDBC 直通模式 | JDBC 契约行为对拍原生驱动全绿 |
 | M2 | 分片路由 + 表名改写 + 基础归并（拼接/流式/TopN/聚合/含分片键 GROUP BY）+ 广播表 | 与存量实现"三相等"对拍全绿 |
 | M3 | 加密全量：列展开/参数加密/plain/assisted/insert-select（语义移植） | 存量 encrypt 测试语料全量对拍全绿 |
 | M4 | 影子双跑 + 灰度 + 切换 | 影子差异率 0；kill switch 演练通过；回放拒绝占比达标 |
@@ -213,11 +216,11 @@ BobaChop M1（SELECT 主干）完成即可启动本仓 M2，两仓流水推进�
 | # | 任务 | 依赖 | DoD |
 |---|---|---|---|
 | T1 | 工程骨架（Maven 多模块 + CI + checkstyle + JDK8 基线） | — | `mvn install` 全绿，模块边界如 §8 |
-| T2 | 配置模型 + 存量配置转换器 | T1 | 存量 YAML → 新模型黄金用例逐字段等价；转换 diff 报告 |
-| T3 | 元数据模型与只读快照（分片规则/加密规则/广播表/绑定表） | T2 | 快照无锁读取单测；规则模型 javadoc 完整 |
-| T4 | 决策链骨架：bind→route→MergePlan 裁决 + guards + UnsupportedQueryException + 回放工具 | T3 | 语料回放产出落格分布/拒绝清单报告；每 ❌ 格拒绝行为有回归用例 |
-| T5 | Driver 直通模式（M1） | T1 | 对拍原生驱动的契约测试矩阵全绿 |
-| T6 | 表名 token 改写（消费 BobaChop 偏移契约） | T4, T5 | 改写后 SQL 与存量逐字相等（SELECT/INSERT/UPDATE/DELETE 主干） |
+| T2 | 配置模型 + 存量配置转换器（含物理数据源/池属性映射模板） | T1 | 存量 YAML → 新模型黄金用例逐字段等价（含池配置）；转换 diff 报告 |
+| T3 | 元数据模型与只读快照（分片规则/加密规则/广播表/绑定表/分区边界 catalog 采集） | T2 | 快照无锁读取单测；分区边界采集与刷新命令用例；规则模型 javadoc 完整 |
+| T4 | 决策链骨架：bind→route→MergePlan 裁决 + guards + UnsupportedQueryException + 回放工具 | T3 | 语料回放产出落格分布/拒绝清单报告（含 D13 分区定位/回退分布）；每 ❌ 格拒绝行为有回归用例 |
+| T5 | JDBC 直通模式（M1） | T1 | 对拍原生驱动的契约测试矩阵全绿 |
+| T6 | 表名 token 改写（消费 BobaChop 偏移契约）；含分区定位改写模板（D13：PG 子表名 / MySQL PARTITION 选择子） | T4, T5 | 改写后 SQL 与存量逐字相等（SELECT/INSERT/UPDATE/DELETE 主干；D13 开启表除外，走黄金用例）；分区改写与回退各有黄金用例 |
 | T7 | execute + 基础归并四策略（M2） | T6 | "三相等"对拍全绿；TopN/流式内存上界证明用例 |
 | T8 | 加密改写全量（M3） | T7 | 存量 encrypt 语料全量对拍全绿；含 insert-select/plain/assisted/参数加密 |
 | T9 | 影子框架：双跑对比 + 报告 + kill switch | T7 | 按比例双跑；秒级切换演练通过 |
@@ -242,6 +245,6 @@ BobaChop M1（SELECT 主干）完成即可启动本仓 M2，两仓流水推进�
 
 **术语**：三相等=路由目标集合/改写后 SQL/结果行逐项与存量一致；决策链=解析→绑定→路由→MergePlan 的纯内存裁决路径；MergePlan=形态×路由结果×表开关×guards 的裁决产物；guards=执行前计数上限防线；直通模式=无分片无加密全透传；绑定表=分片键等值对齐的多表 join 关系；广播表=全副本维度表。
 
-**术语补**：形态类=按行业典型形态构造的合成 SQL（合成命名、无真实字面量）；生产实例=真实捕获的生产流量（真实 schema+字面量，仅内网）。
+**术语补**：形态类=按行业典型形态构造的合成 SQL（合成命名、无真实字面量）；生产实例=真实捕获的生产流量（真实 schema+字面量，仅内网）；分区定位改写=DML 按分区键值改写到具体分区目标（PG 子表名 / MySQL 选择子），不可定位或边界 miss 一律回退父表（D13）；分区维度=route 层库内物理目标计算，与分片维度正交。
 
-**版本记录**：v1.1（2026-11-10）语料策略定稿：切割线=形态类(仓内)/生产实例(内网)，与行业无关；适用场景措辞行业中性。v1.0（2026-11-10）初版定稿。
+**版本记录**：v1.4（2026-11-19）新增 D13：原生分区表 DML 定位改写（表级开关默认关、只写不改读、仅 RANGE/LIST、miss 回退父表、边界 catalog 采集）；T3/T4/T6、非目标、术语同步。v1.3（2026-11-19）新增 D12：物理连接池部署方供给（DataSource 注入 / `dataSourceClassName` 反射构造），不自研不硬绑，池 jar 同原生驱动 provided；T2 扩含池属性映射模板。v1.2（2026-11-19）构件更名 `boba-pour-driver`→`boba-pour-jdbc`（包 `.driver`→`.jdbc`），新增 D11（唯一入口 DataSource，v1 不实现 java.sql.Driver）；“Driver 直通模式”更名“JDBC 直通模式”，自述“JDBC 驱动内嵌形态”改“JDBC 内嵌形态”；指原生数据库驱动的措辞（provided 依赖、驱动参数模板、对拍原生驱动）不变。v1.1（2026-11-10）语料策略定稿：切割线=形态类(仓内)/生产实例(内网)，与行业无关；适用场景措辞行业中性。v1.0（2026-11-10）初版定稿。
