@@ -6,7 +6,7 @@
 | 项目性质 | 基于 BobaChop 解析内核的数据库中间件（JDBC 驱动内嵌形态）：分库分表 + 透明加密；替换存量生产实现 |
 | 仓库与坐标 | github.com/susongyan/bobapour；groupId `io.github.susongyan`；包根 `io.github.susongyan.bobapour`；构件前缀 `boba-pour` |
 | 运行时依赖 | 仅 `boba-chop-core`（1.x）；JDBC 驱动 provided |
-| 方言范围 | MySQL 先行，PostgreSQL 与 Oracle 随后 |
+| 方言范围 | MySQL → PostgreSQL → Oracle（跟随内核 M3/M4 次序） |
 | 配套文档 | BobaChop 项目书（`bobachop.md`，随迁 bobachop 仓 DESIGN.md）——内核层规格与缘起不在此重复 |
 | 文档目的 | 单一事实源：任何工程师或 AI Agent 依据本文档即可继续设计与实现，无需对话上下文 |
 
