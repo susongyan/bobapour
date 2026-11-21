@@ -120,6 +120,15 @@ public final class DataNodes {
         return new ArrayList<String>(new LinkedHashSet<String>(datasourcesOf()));
     }
 
+    /** 去重后的物理表名，按首次出现序（同一模式跨数据源同名，首库序即全序）。 */
+    public List<String> tableNames() {
+        final LinkedHashSet<String> names = new LinkedHashSet<String>();
+        for (final DataNode node : nodes) {
+            names.add(node.tableName());
+        }
+        return new ArrayList<String>(names);
+    }
+
     private List<String> datasourcesOf() {
         final List<String> out = new ArrayList<String>(nodes.size());
         for (final DataNode node : nodes) {
