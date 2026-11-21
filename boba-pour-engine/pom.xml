@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.susongyan</groupId>
+        <artifactId>boba-pour</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>boba-pour-engine</artifactId>
+    <name>BobaPour Engine</name>
+    <description>Decision chain and execution: bind / route / rewrite / execute / merge / guards (DESIGN §5.1)</description>
+
+    <dependencies>
+        <!-- 运行时依赖仅 boba-chop-core（DESIGN §0 硬约束）：AST + 偏移契约的唯一下游消费层 -->
+        <dependency>
+            <groupId>io.github.susongyan</groupId>
+            <artifactId>boba-chop-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.susongyan</groupId>
+            <artifactId>boba-pour-config</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+        </dependency>
+    </dependencies>
+</project>

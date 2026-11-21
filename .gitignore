@@ -7,3 +7,5 @@ target/
 .project
 .settings/
 dependency-reduced-pom.xml
+# 生产实例语料永不进公开仓（DESIGN §8 语料切割线）：只存内网目录
+corpus-internal/

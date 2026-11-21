@@ -13,11 +13,115 @@
     <description>Sharding and transparent-encryption middleware on the BobaChop kernel</description>
     <url>https://github.com/susongyan/bobapour</url>
 
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+
+    <scm>
+        <url>https://github.com/susongyan/bobapour</url>
+        <connection>scm:git:git@github.com:susongyan/bobapour.git</connection>
+        <developerConnection>scm:git:git@github.com:susongyan/bobapour.git</developerConnection>
+    </scm>
+
+    <!-- 依赖方向（DESIGN §8）：jdbc → engine → config；
+         engine 是 boba-chop-core 的唯一消费者（运行时依赖仅此一个，D 硬约束） -->
+    <modules>
+        <module>boba-pour-jdbc</module>
+        <module>boba-pour-engine</module>
+        <module>boba-pour-config</module>
+    </modules>
+
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.source>1.8</maven.compiler.source>
-        <maven.compiler.target>1.8</maven.compiler.target>
+        <!-- Java 8 API 基线：JDK 9+ 上经 release 参数强制；本机 JDK 21 编译即验证（同 bobachop 先例） -->
+        <maven.compiler.release>8</maven.compiler.release>
+        <junit.version>5.10.2</junit.version>
+        <!-- 内核快照随 bobachop main 同步（CI 里 checkout+install；内核发版后钉住 1.x） -->
+        <boba-chop.version>1.0.0-SNAPSHOT</boba-chop.version>
     </properties>
 
-    <!-- modules: boba-pour-jdbc / boba-pour-engine / boba-pour-config（DESIGN.md §8，任务 T1 添加） -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.github.susongyan</groupId>
+                <artifactId>boba-chop-core</artifactId>
+                <version>${boba-chop.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.susongyan</groupId>
+                <artifactId>boba-pour-config</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.susongyan</groupId>
+                <artifactId>boba-pour-engine</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>${junit.version}</version>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.13.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.2.5</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>3.4.1</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+        <plugins>
+            <!-- checkstyle 绑进 verify：本地 mvn install 与 CI mvn verify 同一门禁，
+                 根除"只在 CI 跑"的漂移（bobachop 开发期 13 条 UnusedImports 的教训，随迁）。
+                 规则集与 bobachop 同源，随实现推进逐步收紧。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+                <version>3.3.1</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.puppycrawl.tools</groupId>
+                        <artifactId>checkstyle</artifactId>
+                        <version>10.12.4</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <configLocation>${maven.multiModuleProjectDirectory}/checkstyle.xml</configLocation>
+                    <sourceDirectories>
+                        <sourceDirectory>${project.build.sourceDirectory}</sourceDirectory>
+                    </sourceDirectories>
+                    <includeTestSourceDirectory>true</includeTestSourceDirectory>
+                    <consoleOutput>true</consoleOutput>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>checkstyle-verify</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

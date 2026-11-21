@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # boba-chop-core 尚未发布制品仓：CI 内联安装内核快照（公共仓直取）。
+      # -DskipTests：内核自身质量由其仓 CI 门禁，此处只取制品；checkstyle 随 install 照跑。
+      - name: Checkout BobaChop kernel (sole runtime dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: susongyan/bobachop
+          path: bobachop
+      - name: Install BobaChop kernel
+        run: mvn -B -ntp -f bobachop/pom.xml install -DskipTests
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build (Java 8 release baseline)
+        run: mvn -B -ntp verify
+      # checkstyle 已绑进 pom 的 verify 阶段（maven-checkstyle-plugin + checkstyle 10.12.4），
+      # 本地 mvn install 与 CI 同一门禁，无需独立步骤（bobachop 同款）

@@ -8,4 +8,4 @@
 
 - 设计规格（单一事实源）：[DESIGN.md](DESIGN.md)
 - 模块规划：`boba-pour-jdbc` / `boba-pour-engine` / `boba-pour-config` / `corpus/`
-- 状态：设计定稿（DESIGN v1.2），M0 未开工
+- 状态：设计定稿（DESIGN v1.9），M0 进行中（T1 工程骨架）
