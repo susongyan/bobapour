@@ -17,6 +17,7 @@ import io.github.susongyan.bobapour.config.model.PartitionConfig;
 import io.github.susongyan.bobapour.config.model.PartitionType;
 import io.github.susongyan.bobapour.config.model.PourConfig;
 import io.github.susongyan.bobapour.config.model.StrategyConfig;
+import io.github.susongyan.bobapour.config.metadata.DataNodes;
 import io.github.susongyan.bobapour.config.model.TableRuleConfig;
 import io.github.susongyan.bobapour.config.yaml.MapNode;
 import io.github.susongyan.bobapour.config.yaml.ScalarNode;
@@ -139,36 +140,11 @@ public final class ConfigLoader {
      * 返回 [库段含区间, 表段含区间]。
      */
     static boolean[] checkDataNodes(final String pattern, final String path) {
-        final List<String> segments = splitSegments(pattern);
+        final List<String> segments = DataNodes.splitSegments(pattern);
         if (2 != segments.size() || segments.get(0).isEmpty() || segments.get(1).isEmpty()) {
             throw err(path, "须为两段 '库.表' 形态，实际: " + pattern);
         }
         return new boolean[]{checkSegment(segments.get(0), path + "（库段）"), checkSegment(segments.get(1), path + "（表段）")};
-    }
-
-    /** 段切分：只认 ${..} 记号外的 '.'（记号内的 ".." 与数字不被切）。 */
-    private static List<String> splitSegments(final String pattern) {
-        final List<String> out = new ArrayList<String>();
-        final StringBuilder cur = new StringBuilder();
-        boolean inToken = false;
-        for (int i = 0; i < pattern.length(); i++) {
-            final char c = pattern.charAt(i);
-            if (!inToken && '$' == c && i + 1 < pattern.length() && '{' == pattern.charAt(i + 1)) {
-                inToken = true;
-                cur.append("${");
-                i++;
-            } else if (inToken && '}' == c) {
-                inToken = false;
-                cur.append(c);
-            } else if (!inToken && '.' == c) {
-                out.add(cur.toString());
-                cur.setLength(0);
-            } else {
-                cur.append(c);
-            }
-        }
-        out.add(cur.toString());
-        return out;
     }
 
     private static boolean checkSegment(final String segment, final String path) {
