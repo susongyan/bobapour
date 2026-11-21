@@ -11,6 +11,11 @@ public final class SeqNode extends YamlNode {
 
     private final List<YamlNode> items = new ArrayList<YamlNode>();
 
+    /** 空序列（外部构造默认值的合法途径；add 包内私有保证其不可变）。 */
+    public static SeqNode empty() {
+        return new SeqNode();
+    }
+
     void add(final YamlNode item) {
         items.add(item);
     }
@@ -21,6 +26,10 @@ public final class SeqNode extends YamlNode {
 
     public int size() {
         return items.size();
+    }
+
+    public boolean isEmpty() {
+        return items.isEmpty();
     }
 
     @Override

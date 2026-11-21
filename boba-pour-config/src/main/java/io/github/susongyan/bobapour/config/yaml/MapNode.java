@@ -13,6 +13,11 @@ public final class MapNode extends YamlNode {
 
     private final Map<String, YamlNode> children = new LinkedHashMap<String, YamlNode>();
 
+    /** 空映射（外部构造默认值的合法途径；put 包内私有保证其不可变）。 */
+    public static MapNode empty() {
+        return new MapNode();
+    }
+
     void put(final String key, final YamlNode value) {
         children.put(key, value);
     }
@@ -29,6 +34,10 @@ public final class MapNode extends YamlNode {
 
     public int size() {
         return children.size();
+    }
+
+    public boolean isEmpty() {
+        return children.isEmpty();
     }
 
     @Override
