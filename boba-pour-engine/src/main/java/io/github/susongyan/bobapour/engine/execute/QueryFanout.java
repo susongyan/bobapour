@@ -14,19 +14,16 @@ import java.util.List;
  */
 public final class QueryFanout implements AutoCloseable {
 
-    /** 单分片资源三件套。 */
+    /** 单分片资源三件套（语句经游标 {@code getStatement()} 随之关闭——兼容直执行与参数回放）。 */
     public static final class Shard {
 
         private final String datasourceName;
         private final Connection connection;
-        private final Statement statement;
         private final ResultSet resultSet;
 
-        Shard(final String datasourceName, final Connection connection, final Statement statement,
-                final ResultSet resultSet) {
+        Shard(final String datasourceName, final Connection connection, final ResultSet resultSet) {
             this.datasourceName = datasourceName;
             this.connection = connection;
-            this.statement = statement;
             this.resultSet = resultSet;
         }
 
@@ -40,18 +37,28 @@ public final class QueryFanout implements AutoCloseable {
 
         void close() throws SQLException {
             SQLException failure = null;
+            // 语句须在游标关闭<b>前</b>取得——H2 等驱动游标关闭后 getStatement() 抛错
+            // （JDBC 仅约定可返回 null）；取不到时跳过，语句随连接关闭级联。
+            Statement statement = null;
+            try {
+                statement = resultSet.getStatement();
+            } catch (final SQLException e) {
+                statement = null;
+            }
             try {
                 resultSet.close();
             } catch (final SQLException e) {
                 failure = e;
             }
-            try {
-                statement.close();
-            } catch (final SQLException e) {
-                if (null == failure) {
-                    failure = e;
-                } else {
-                    failure.addSuppressed(e);
+            if (null != statement) {
+                try {
+                    statement.close();
+                } catch (final SQLException e) {
+                    if (null == failure) {
+                        failure = e;
+                    } else {
+                        failure.addSuppressed(e);
+                    }
                 }
             }
             try {

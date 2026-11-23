@@ -34,17 +34,43 @@ public final class Executor {
         Connection connection(String datasourceName) throws SQLException;
     }
 
+    /** 读路径单元执行器：默认 Statement 直执行；参数回放形态（jdbc 预编译语句）由此注入。 */
+    public interface UnitQuery {
+
+        /** 在连接上执行单元 SQL 返回已打开游标（语句经 {@code getStatement()} 随游标关闭）。 */
+        ResultSet execute(Connection connection, String sql) throws SQLException;
+    }
+
+    /** 写路径单元执行器（参数回放形态同 {@link UnitQuery}）。 */
+    public interface UnitUpdate {
+
+        /** 在连接上执行单元写 SQL，返回影响行数（语句与连接由实现负责关闭）。 */
+        int execute(Connection connection, String sql) throws SQLException;
+    }
+
     /** 写路径：逐单元执行，返回合并影响行数（广播写取首副本计数，见类注）。 */
     public static int executeUpdate(final RewriteResult units, final ConnectionProvider provider,
             final MergePlan plan) throws SQLException {
+        return executeUpdate(units, provider, plan, new UnitUpdate() {
+            @Override
+            public int execute(final Connection connection, final String sql) throws SQLException {
+                return executeOne(connection, sql);
+            }
+        });
+    }
+
+    /** 写路径（自定义单元执行）：参数回放等形态经 {@link UnitUpdate} 注入。 */
+    public static int executeUpdate(final RewriteResult units, final ConnectionProvider provider,
+            final MergePlan plan, final UnitUpdate unit) throws SQLException {
         if (units.isEmpty()) {
             throw new IllegalStateException("写路径 fan-out 单元为空（裁决不变量破坏）");
         }
         boolean first = true;
         int total = 0;
         int representative = 0;
-        for (final RewriteResult.RoutedSql unit : units.units()) {
-            final int count = executeOne(unit, provider);
+        for (final RewriteResult.RoutedSql routed : units.units()) {
+            final Connection connection = provider.connection(routed.datasourceName());
+            final int count = unit.execute(connection, routed.sql());
             if (first) {
                 representative = count;
                 first = false;
@@ -57,21 +83,32 @@ public final class Executor {
     /** 读路径：打开全部分片游标（返回值持有连接，游标关闭级联归还——见 {@link QueryFanout}）。 */
     public static QueryFanout openQuery(final RewriteResult units, final ConnectionProvider provider,
             final GuardsConfig guards) throws SQLException {
-        if (units.isEmpty()) {
-            throw new IllegalStateException("读路径 fan-out 单元为空（裁决不变量破坏）");
-        }
-        final List<QueryFanout.Shard> shards = new ArrayList<QueryFanout.Shard>(units.units().size());
-        try {
-            for (final RewriteResult.RoutedSql unit : units.units()) {
-                final Connection connection = provider.connection(unit.datasourceName());
+        return openQuery(units, provider, guards, new UnitQuery() {
+            @Override
+            public ResultSet execute(final Connection connection, final String sql) throws SQLException {
                 final Statement statement = connection.createStatement();
                 // D3 第三防线（提示级）：游标流式提示；方言强模板参数（MySQL streaming/cursorFetch）
                 // 随方言适配任务落驱动参数模板，此处不预置方言魔法值。
                 if (guards.streamingFetch()) {
                     statement.setFetchSize(1);
                 }
-                final ResultSet resultSet = statement.executeQuery(unit.sql());
-                shards.add(new QueryFanout.Shard(unit.datasourceName(), connection, statement, resultSet));
+                return statement.executeQuery(sql);
+            }
+        });
+    }
+
+    /** 读路径（自定义单元执行）：参数回放等形态经 {@link UnitQuery} 注入。 */
+    public static QueryFanout openQuery(final RewriteResult units, final ConnectionProvider provider,
+            final GuardsConfig guards, final UnitQuery unit) throws SQLException {
+        if (units.isEmpty()) {
+            throw new IllegalStateException("读路径 fan-out 单元为空（裁决不变量破坏）");
+        }
+        final List<QueryFanout.Shard> shards = new ArrayList<QueryFanout.Shard>(units.units().size());
+        try {
+            for (final RewriteResult.RoutedSql routed : units.units()) {
+                final Connection connection = provider.connection(routed.datasourceName());
+                final ResultSet resultSet = unit.execute(connection, routed.sql());
+                shards.add(new QueryFanout.Shard(routed.datasourceName(), connection, resultSet));
             }
         } catch (final SQLException e) {
             closeShards(shards, e);
@@ -80,13 +117,11 @@ public final class Executor {
         return new QueryFanout(shards);
     }
 
-    private static int executeOne(final RewriteResult.RoutedSql unit, final ConnectionProvider provider)
-            throws SQLException {
-        final Connection connection = provider.connection(unit.datasourceName());
+    private static int executeOne(final Connection connection, final String sql) throws SQLException {
         try {
             final Statement statement = connection.createStatement();
             try {
-                return statement.executeUpdate(unit.sql());
+                return statement.executeUpdate(sql);
             } finally {
                 statement.close();
             }

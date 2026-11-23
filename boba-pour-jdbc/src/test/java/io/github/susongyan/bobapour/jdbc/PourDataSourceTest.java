@@ -19,8 +19,9 @@ import io.github.susongyan.bobapour.config.ConfigLoader;
 import io.github.susongyan.bobapour.config.model.PourConfig;
 
 /**
- * T5 契约矩阵——入口形态与借出契约（D11/D12）：
- * 注入/反射两种池供给形态可用；分片/加密/广播配置在 M1 构造即拒（D8 fail-fast）；
+ * T5/T7 契约矩阵——入口形态与借出契约（D11/D12）：
+ * 注入/反射两种池供给形态可用；T7 起分片/广播配置进引擎模式（Map 注入或反射构造），
+ * 加密配置 M3 前构造即拒（D8 fail-fast）；
  * 契约①借出显式设满连接状态——污染状态归还后重借出，逐字段回到首次借出捕获的基线。
  */
 class PourDataSourceTest {
@@ -93,10 +94,10 @@ class PourDataSourceTest {
         assertEquals(30, pour.getLoginTimeout());
     }
 
-    // ---------- M1 直通守卫（D8） ----------
+    // ---------- 模式裁决守卫（D8 fail-fast；T7 起分片/广播进引擎模式） ----------
 
     @Test
-    void 拒绝_分片配置_M1仅直通() {
+    void 拒绝_分片配置_单实例注入为直通专用() {
         final PourConfig config = ConfigLoader.load(String.join("\n",
                 "datasources:", "  d:", "    className: X",
                 "sharding:", "  tables:", "    t:",
@@ -110,13 +111,13 @@ class PourDataSourceTest {
                 ""));
         final ConfigException e = assertThrows(ConfigException.class,
                 () -> new PourDataSource(config, ContractOracle.rawPool()));
-        assertTrue(e.getMessage().contains("M1 仅直通模式"), e.getMessage());
+        assertTrue(e.getMessage().contains("单实例注入为直通专用"), e.getMessage());
     }
 
     @Test
-    void 拒绝_加密配置_M1仅直通() {
+    void 拒绝_加密配置_M3前不放行() {
         final PourConfig config = ConfigLoader.load(String.join("\n",
-                "datasources:", "  d:", "    className: X",
+                "datasources:", "  ds_0:", "    className: X",
                 "encrypt:", "  encryptors:", "    aes:", "      type: AES",
                 "  tables:", "    t_order:", "      columns:", "        phone:",
                 "          cipherColumn: phone_cipher", "          encryptor: aes",
@@ -125,12 +126,44 @@ class PourDataSourceTest {
     }
 
     @Test
-    void 拒绝_广播配置_M1仅直通() {
+    void 拒绝_引擎模式_未供给池实例() {
+        final PourConfig config = ConfigLoader.load(String.join("\n",
+                "datasources:",
+                "  ds_0:", "    className: org.h2.jdbcx.JdbcDataSource",
+                "  ds_1:", "    className: org.h2.jdbcx.JdbcDataSource",
+                "sharding:", "  tables:", "    t:",
+                "      actualDataNodes: ds_${0..1}.t",
+                "      databaseStrategy:",
+                "        shardingColumn: k",
+                "        algorithm:",
+                "          type: MOD",
+                "          props:",
+                "            count: 2",
+                ""));
+        final ConfigException e = assertThrows(ConfigException.class,
+                () -> new PourDataSource(config, java.util.Collections.singletonMap(
+                        "ds_0", ContractOracle.rawPool())));
+        assertTrue(e.getMessage().contains("ds_1") && e.getMessage().contains("未供给池实例"), e.getMessage());
+    }
+
+    @Test
+    void 引擎模式_广播配置_Map注入可用() throws SQLException {
+        ContractOracle.bootstrap();
         final PourConfig config = ConfigLoader.load(String.join("\n",
                 "datasources:", "  d:", "    className: X",
-                "broadcastTables:", "  - t_config",
+                "broadcastTables:", "  - t_contract",
                 ""));
-        assertThrows(ConfigException.class, () -> new PourDataSource(config, ContractOracle.rawPool()));
+        final java.util.Map<String, javax.sql.DataSource> pools =
+                new java.util.LinkedHashMap<String, javax.sql.DataSource>();
+        pools.put("d", ContractOracle.rawPool());
+        final PourDataSource pour = new PourDataSource(config, pools);
+        assertTrue(pour.engineMode(), "广播表即引擎模式");
+        try (Connection conn = pour.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM t_contract")) {
+            rs.next();
+            assertTrue(rs.getLong(1) >= 3, "广播读取样首数据源（对照库播种行可见）");
+        }
     }
 
     @Test
