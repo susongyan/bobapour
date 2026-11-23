@@ -3,6 +3,8 @@ package io.github.susongyan.bobapour.engine.merge;
 import java.util.List;
 
 import io.github.susongyan.bobachop.ast.InsertStatement;
+import io.github.susongyan.bobachop.ast.Limit;
+import io.github.susongyan.bobachop.ast.SelectStatement;
 import io.github.susongyan.bobachop.ast.Statement;
 import io.github.susongyan.bobapour.config.metadata.DataNode;
 import io.github.susongyan.bobapour.config.metadata.MetadataSnapshot;
@@ -76,23 +78,29 @@ public final class MergePlanner {
         if (shape.join) {
             requireBindingGroup(bound);
         }
+        if (shape.groupBy) {
+            // 分组行先于"LIMIT 无排序"：GROUP BY + LIMIT 的窗口序 = 分组键（改写层补
+            // ORDER BY 下推，矩阵"含分片键 GROUP BY"格），非矩阵 ❌ 的裸 LIMIT 格。
+            return planGroupBy(bound, route, snapshot);
+        }
         if (shape.limit && !shape.orderBy) {
             throw new UnsupportedQueryException("LIMIT", -1, "LIMIT 无 ORDER BY（结果跨分片非确定，矩阵 ❌）", "");
-        }
-        if (shape.groupBy) {
-            return planGroupBy(bound, route, snapshot);
         }
         if (shape.aggregate) {
             if (shape.aggregateAvg) {
                 throw new UnsupportedQueryException("AVG", -1, "AVG 跨分片（v1.1 拆 SUM+COUNT）", "");
             }
+            // 重组装前提：全聚合投影（混合/表达式投影无跨分片合并语义——T7 执行层收紧）。
+            MergeSpec.aggregates(selectOf(bound));
             return plan(MergePlan.Kind.REASSEMBLE, "SUM(SUM)/MAX(MAX)… 重组装", targets, snapshot, route);
         }
         if (shape.orderBy && shape.limit) {
-            requireTopNWindow(shape, snapshot);
+            requireTopN(bound, snapshot);
             return plan(MergePlan.Kind.TOP_N, topNDescription(shape), targets, snapshot, route);
         }
         if (shape.orderBy) {
+            // 流式归并前提：排序键可归并（裸列引用 + 标签可寻，见 MergeSpec）。
+            MergeSpec.orderKeys(selectOf(bound));
             return plan(MergePlan.Kind.STREAM_MERGE, "优先队列流式归并，排序下推各分片", targets, snapshot, route);
         }
         return plan(MergePlan.Kind.CONCAT, "结果拼接", targets, snapshot, route);
@@ -160,11 +168,22 @@ public final class MergePlanner {
                         "GROUP BY 不含分片键（组跨分片，无界类别，矩阵 ❌）", "列: " + column);
             }
         }
+        if (shape.orderBy) {
+            // 组不跨分片但组间序是全局序：拼接会破坏用户排序，须流式（T7 修正 T4 骨架）。
+            MergeSpec.orderKeys(selectOf(bound));
+            if (shape.limit) {
+                requireTopN(bound, snapshot);
+                return plan(MergePlan.Kind.TOP_N, topNDescription(shape), route.targets(), snapshot, route);
+            }
+            return plan(MergePlan.Kind.STREAM_MERGE, "组不跨分片 + 排序键可映射，流式归并",
+                    route.targets(), snapshot, route);
+        }
         if (shape.limit) {
-            requireTopNWindow(shape, snapshot);
+            // 无用户排序：窗口序 = 分组键（改写层按同清单补 ORDER BY 下推）。
+            requireTopN(bound, snapshot);
             return plan(MergePlan.Kind.TOP_N, topNDescription(shape), route.targets(), snapshot, route);
         }
-        return plan(MergePlan.Kind.CONCAT, "组不跨分片，拼接（改写层补 ORDER BY 供流式）",
+        return plan(MergePlan.Kind.CONCAT, "组不跨分片，拼接",
                 route.targets(), snapshot, route);
     }
 
@@ -210,6 +229,40 @@ public final class MergePlanner {
             throw new UnsupportedQueryException("guards.maxMergeWindowRows", -1, "TopN 窗口超限（D3）",
                     "当前值=" + shape.limitWindow + "，上限值=" + snapshot.guards().maxMergeWindowRows());
         }
+    }
+
+    /**
+     * TopN 执行前提（T7 执行层落地后的静态裁决面，全部执行前拒绝）：①窗口为整数字面量
+     * （参数标记需执行层参数注入，v1 不做——拒绝可读优于运行期半支持）；②窗口总量过
+     * guards.maxMergeWindowRows；③LIMIT/OFFSET 书写形态（FETCH 形态无下推模板）；④窗口序
+     * 键可归并（用户排序键或分组键，见 MergeSpec——标签可寻才可比）。
+     */
+    private static void requireTopN(final BoundStatement bound, final MetadataSnapshot snapshot) {
+        final BoundStatement.Shape shape = bound.shape();
+        if (!shape.limitLiteral) {
+            throw new UnsupportedQueryException("LIMIT", -1,
+                    "动态 LIMIT 窗口（参数标记/非整数字面量）跨分片需参数注入（v1 静态裁决不支持）", "");
+        }
+        requireTopNWindow(shape, snapshot);
+        final SelectStatement select = selectOf(bound);
+        if (Limit.Form.FETCH == select.limit().form()) {
+            throw new UnsupportedQueryException("LIMIT", -1,
+                    "FETCH 形态分页跨分片未支持（LIMIT/OFFSET 形态可用，下推模板仅 LIMIT 族）", "");
+        }
+        if (null != select.orderBy()) {
+            MergeSpec.orderKeys(select);
+        } else {
+            MergeSpec.groupKeys(select);
+        }
+    }
+
+    private static SelectStatement selectOf(final BoundStatement bound) {
+        final Statement statement = bound.statement();
+        if (!(statement instanceof SelectStatement)) {
+            throw new IllegalStateException("归并裁决只消费 SELECT（不变量破坏）: "
+                    + statement.getClass().getSimpleName());
+        }
+        return (SelectStatement) statement;
     }
 
     private static String topNDescription(final BoundStatement.Shape shape) {

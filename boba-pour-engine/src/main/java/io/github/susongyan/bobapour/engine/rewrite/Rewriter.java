@@ -10,6 +10,8 @@ import java.util.Set;
 import io.github.susongyan.bobachop.ast.DeleteStatement;
 import io.github.susongyan.bobachop.ast.Expr;
 import io.github.susongyan.bobachop.ast.InsertStatement;
+import io.github.susongyan.bobachop.ast.Limit;
+import io.github.susongyan.bobachop.ast.SelectStatement;
 import io.github.susongyan.bobachop.ast.Statement;
 import io.github.susongyan.bobachop.ast.TableName;
 import io.github.susongyan.bobachop.ast.UpdateStatement;
@@ -20,6 +22,7 @@ import io.github.susongyan.bobapour.config.metadata.MetadataSnapshot;
 import io.github.susongyan.bobapour.config.metadata.TableSnapshot;
 import io.github.susongyan.bobapour.engine.bind.BoundStatement;
 import io.github.susongyan.bobapour.engine.merge.MergePlan;
+import io.github.susongyan.bobapour.engine.merge.MergeSpec;
 import io.github.susongyan.bobapour.engine.route.RouteResult;
 import io.github.susongyan.bobapour.exception.UnsupportedQueryException;
 
@@ -37,6 +40,9 @@ import io.github.susongyan.bobapour.exception.UnsupportedQueryException;
  * 选择子（落表名后、别名前）；PG 以声明分区名为子表全名替换（表维分片组合时子表名不可静态
  * 推导 → 回退）；Oracle 无模板不改写。INSERT 逐行定位但<b>组级统一裁决</b>：全部行命中同一
  * 分区才改写，跨分区/miss/insert-select/缺列 → 整组回退父表（D13 原文语义）。</li>
+ * <li>TopN 下推（T7）：LIMIT 子句整段替换为 {@code LIMIT offset+count}（各单元同形）；
+ * GROUP BY 无用户排序时 LIMIT 前补分组键 ORDER BY（窗口序供外层 TopN 比较器，键清单与
+ * MergeSpec.groupKeys 同源）。</li>
  * </ul>
  *
  * <p>语句分组：单表 = 逐节点一语句（路由稳定序）；绑定组多表（JOIN）按绑定前提推导对齐——
@@ -77,11 +83,80 @@ public final class Rewriter {
             return new RewriteResult(splitInsert(sql, bound, route, tokens, writeTarget, profile));
         }
         final String partition = route.writePartition();
+        final TopNEdit topN = topNEdit(sql, bound, plan);
         for (final Group group : statementGroups(bound, route)) {
-            units.add(new RewriteResult.RoutedSql(group.datasource,
-                    assemble(sql, tokens, group.physical, writeTarget, partition, profile, bound, 0, sql.length())));
+            final String unitSql;
+            if (null == topN) {
+                unitSql = assemble(sql, tokens, group.physical, writeTarget, partition, profile, bound,
+                        0, sql.length());
+            } else {
+                final StringBuilder out = new StringBuilder(sql.length());
+                out.append(assemble(sql, tokens, group.physical, writeTarget, partition, profile, bound,
+                        0, topN.start));
+                out.append(topN.insertBefore);
+                out.append(topN.replacement);
+                out.append(assemble(sql, tokens, group.physical, writeTarget, partition, profile, bound,
+                        topN.stop + 1, sql.length()));
+                unitSql = out.toString();
+            }
+            units.add(new RewriteResult.RoutedSql(group.datasource, unitSql));
         }
         return new RewriteResult(units);
+    }
+
+    // ---------- TopN 下推（矩阵"ORDER BY + LIMIT"格） ----------
+
+    /** LIMIT 子句区间的两处文本编辑（各单元同形）。 */
+    private static final class TopNEdit {
+
+        final int start;
+        final int stop;
+        final String insertBefore;
+        final String replacement;
+
+        TopNEdit(final int start, final int stop, final String insertBefore, final String replacement) {
+            this.start = start;
+            this.stop = stop;
+            this.insertBefore = insertBefore;
+            this.replacement = replacement;
+        }
+    }
+
+    /**
+     * TopN 下推编辑（裁决层已保证双整数字面量 + LIMIT 族形态）：LIMIT 子句整段替换为
+     * {@code LIMIT offset+count}（窗口总量守恒，外层 TopN 策略跳 offset 取 count）；
+     * GROUP BY 无用户排序时在 LIMIT 前补 {@code ORDER BY <分组键源文本>}——窗口序与
+     * {@link MergeSpec#groupKeys} 同清单（执行层比较器按标签取值，两边一致）。
+     */
+    private static TopNEdit topNEdit(final String sql, final BoundStatement bound, final MergePlan plan) {
+        if (MergePlan.Kind.TOP_N != plan.kind()
+                || !(bound.statement() instanceof SelectStatement)) {
+            return null;
+        }
+        final SelectStatement select = (SelectStatement) bound.statement();
+        final Limit limit = select.limit();
+        if (null == limit) {
+            return null;
+        }
+        final long[] window = MergeSpec.limitWindow(select);
+        String insertBefore = "";
+        if (null == select.orderBy() && null != select.groupBy()) {
+            // 前字符已是空白（LIMIT 关键词分隔的常态）则不再补首空格——避免双空格；
+            // 注释分隔（*/LIMIT）等非常态则补，拼接永远成词。
+            final boolean needsSpace = limit.start() > 0
+                    && !Character.isWhitespace(sql.charAt(limit.start() - 1));
+            final StringBuilder order = new StringBuilder(needsSpace ? " ORDER BY " : "ORDER BY ");
+            for (int i = 0; i < select.groupBy().size(); i++) {
+                if (i > 0) {
+                    order.append(", ");
+                }
+                final Expr column = select.groupBy().get(i);
+                order.append(sql, column.start(), column.stop() + 1);
+            }
+            insertBefore = order.append(' ').toString();
+        }
+        return new TopNEdit(limit.start(), limit.stop(), insertBefore,
+                "LIMIT " + (window[0] + window[1]));
     }
 
     // ---------- 语句分组 ----------

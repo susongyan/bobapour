@@ -28,5 +28,10 @@
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
         </dependency>
+        <!-- T7 执行层测试 oracle：H2 内嵌双库扮演分片（对拍参照，与 jdbc 模块 M1 同源） -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+        </dependency>
     </dependencies>
 </project>
