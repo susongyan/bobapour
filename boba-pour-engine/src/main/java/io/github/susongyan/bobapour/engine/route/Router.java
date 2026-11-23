@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import io.github.susongyan.bobachop.ast.Assignment;
 import io.github.susongyan.bobachop.ast.DeleteStatement;
 import io.github.susongyan.bobachop.ast.InsertStatement;
 import io.github.susongyan.bobachop.ast.Statement;
@@ -25,7 +26,8 @@ import io.github.susongyan.bobapour.exception.UnsupportedQueryException;
  * 算法 SPI 于 M2/T7 落地，未注册类型在此显式拒绝）。缺键维度 = 全量节点（全路由），
  * 不做猜测——全路由流量随后在裁决层按表开关/矩阵/guards 显式处置。
  * INSERT 逐行拆行路由（D9）：行缺所需分片键 = 不可静态路由，显式拒绝。
- * D13 分区定位仅统计写路径（读路径永不改写）：逐值 locate，miss/无键/类型不符计回退父表。
+ * D13 分区定位仅写路径（读路径永不改写）：INSERT 逐行 locate（行级定位名）、UPDATE/DELETE
+ * 语句级 locate（全部键值同一分区才定位；SET 含分区键强制回退）；miss/无键/类型不符回退父表。
  */
 public final class Router {
 
@@ -40,26 +42,80 @@ public final class Router {
         }
         List<List<DataNode>> insertRowTargets = null;
         final TableBinding writeTarget = writeTarget(bound);
-        if (bound.statement() instanceof InsertStatement && null != writeTarget) {
+        if (bound.statement() instanceof InsertStatement && null != writeTarget
+                && null != writeTarget.insertRows()) {
+            // 缺列清单的 VALUES 行不可静态提取（bind 不产行值）——不产逐行目标，
+            // 多目标时由裁决层显式拒绝（拆行是执行正确性前提）。
             insertRowTargets = insertTargets(writeTarget);
         }
         int located = 0;
         int fallback = 0;
+        List<String> insertRowPartitions = null;
+        String writePartition = null;
         if (null != writeTarget && null != writeTarget.table().partition()) {
             final PartitionIndex partition = writeTarget.table().partition();
-            final List<Object> values = writeTarget.partitionKeyValues();
-            if (values.isEmpty()) {
-                fallback++;
-            }
-            for (final Object value : values) {
-                if (null == partition.locate(value)) {
+            if (bound.statement() instanceof InsertStatement) {
+                // INSERT 逐行口径：行值 locate（缺列/参数标记/miss → null=该行回退父表）；
+                // insert-select 不可静态定位（D13 一律回退）。
+                if (null != insertRowTargets) {
+                    insertRowPartitions = new ArrayList<String>(writeTarget.insertRows().size());
+                    for (final Map<String, Object> row : writeTarget.insertRows()) {
+                        final String name = partition.locate(row.get(partition.key().toLowerCase()));
+                        insertRowPartitions.add(name);
+                        if (null == name) {
+                            fallback++;
+                        } else {
+                            located++;
+                        }
+                    }
+                } else {
+                    fallback++;
+                }
+            } else {
+                // UPDATE/DELETE 语句级口径：全部键值命中同一分区才定位；miss/多分区 → 回退。
+                // SET 含分区键 = 跨分区更新（改写必违反分区约束），语句级强制回退（D13）。
+                if (setContainsPartitionKey(bound.statement(), partition.key())) {
                     fallback++;
                 } else {
-                    located++;
+                    final List<Object> values = writeTarget.partitionKeyValues();
+                    if (values.isEmpty()) {
+                        fallback++;
+                    } else {
+                        String agreed = null;
+                        boolean uniform = true;
+                        for (final Object value : values) {
+                            final String name = partition.locate(value);
+                            if (null == name) {
+                                fallback++;
+                                uniform = false;
+                            } else {
+                                located++;
+                                if (null == agreed) {
+                                    agreed = name;
+                                } else if (!agreed.equals(name)) {
+                                    uniform = false;
+                                }
+                            }
+                        }
+                        writePartition = uniform ? agreed : null;
+                    }
                 }
             }
         }
-        return new RouteResult(tableTargets, insertRowTargets, located, fallback);
+        return new RouteResult(tableTargets, insertRowTargets, located, fallback, insertRowPartitions, writePartition);
+    }
+
+    /** UPDATE SET 赋值列含分区键（跨分区更新，D13 语句级回退前提）。 */
+    private static boolean setContainsPartitionKey(final Statement statement, final String partitionKey) {
+        if (!(statement instanceof UpdateStatement)) {
+            return false;
+        }
+        for (final Assignment assignment : ((UpdateStatement) statement).assignments()) {
+            if (assignment.column().name().equalsIgnoreCase(partitionKey)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 语句级目标：库维 × 表维索引笛卡尔。 */

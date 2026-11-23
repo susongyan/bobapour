@@ -87,6 +87,16 @@ public final class Binder {
             addManaged(insert.table().name(), managed, broadcasts, unmanaged, snapshot);
             if (insert.source() instanceof SelectSource) {
                 insertSelect = true;
+                // insert-select：源查询 FROM 参与受管发现、WHERE 参与目标表键值提取
+                //（单分片判定与改写面前提，T6）；跨分片拆行属执行层（T7 前不裁决）。
+                final SelectQuery source = ((SelectSource) insert.source()).query();
+                if (source instanceof SelectStatement) {
+                    final SelectStatement select = (SelectStatement) source;
+                    collectFrom(select.from(), managed, broadcasts, unmanaged, snapshot);
+                    if (null != select.where()) {
+                        conditions.add(select.where());
+                    }
+                }
             } else if (insert.source() instanceof ValuesSource && null != insert.columns()) {
                 insertRows = extractRows(insert, (ValuesSource) insert.source());
             }

@@ -119,11 +119,15 @@ public final class MergePlanner {
             if (bound.shape().insertSelect) {
                 if (targets.size() > 1) {
                     throw new UnsupportedQueryException("INSERT-SELECT", -1,
-                            "跨分片 insert-select 拆行需改写层（T6/T8 到达前不裁决）", "");
+                            "跨分片 insert-select 需执行层行级处理（T7 前不裁决）", "");
                 }
                 return plan(MergePlan.Kind.PASSTHROUGH, "单分片写", targets, snapshot, route);
             }
             if (targets.size() > 1) {
+                if (null == route.insertRowTargets()) {
+                    throw new UnsupportedQueryException("INSERT", -1,
+                            "拆行需列清单与 VALUES 行（缺列清单不可静态提取行值）", "");
+                }
                 requireShardGuard(targets, snapshot);
                 return plan(MergePlan.Kind.WRITE_SPLIT, "逐行按分片键拆行路由（D9）", targets, snapshot, route);
             }
