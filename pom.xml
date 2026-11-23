@@ -39,6 +39,9 @@
         <!-- Java 8 API 基线：JDK 9+ 上经 release 参数强制；本机 JDK 21 编译即验证（同 bobachop 先例） -->
         <maven.compiler.release>8</maven.compiler.release>
         <junit.version>5.10.2</junit.version>
+        <!-- 契约测试矩阵的对拍 oracle（T5，仅测试期）：M1 直通用 H2 内嵌库锚定 JDBC 契约行为；
+             生产形态下驱动/池 jar 由部署方供给（D12），不进任何模块的运行时依赖 -->
+        <h2.version>2.2.224</h2.version>
         <!-- 内核快照随 bobachop main 同步（CI 里 checkout+install；内核发版后钉住 1.x） -->
         <boba-chop.version>1.0.0-SNAPSHOT</boba-chop.version>
     </properties>
@@ -64,6 +67,12 @@
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter</artifactId>
                 <version>${junit.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.h2database</groupId>
+                <artifactId>h2</artifactId>
+                <version>${h2.version}</version>
                 <scope>test</scope>
             </dependency>
         </dependencies>

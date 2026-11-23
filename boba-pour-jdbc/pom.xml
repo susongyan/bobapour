@@ -23,7 +23,11 @@
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
         </dependency>
-        <!-- 原生 JDBC 驱动与连接池 jar 一律 provided（D12）：本模块只面向 java.sql 契约，
-             M1 契约测试矩阵引入具体驱动时同样 provided -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+        </dependency>
+        <!-- 部署形态下原生驱动与连接池 jar 由部署方供给（D12，同 provided 语义）；
+             测试矩阵以 H2 内嵌库为对拍 oracle（仅测试期，test scope 不进运行时依赖） -->
     </dependencies>
 </project>
